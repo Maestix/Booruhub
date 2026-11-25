@@ -127,11 +127,12 @@ fun App(hub: Hub) {
             .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal)),
     ) {
         BackHandler(enabled = hub.tab != Tab.Feed && hub.page == null && hub.viewer == null && hub.web == null) { hub.tab = Tab.Feed }
-        // Choosing posts: back stops choosing first.
-        BackHandler(enabled = hub.picking && hub.viewer == null && hub.web == null) { hub.clearPicks() }
         BackHandler(enabled = hub.page != null && hub.viewer == null && hub.web == null) { hub.page = null }
         // On the feed, back undoes the last search (a tag tapped in a post, say) before it leaves the app.
         BackHandler(enabled = hub.backDepth > 0 && hub.tab == Tab.Feed && hub.page == null && hub.viewer == null && hub.web == null) { hub.goBack() }
+        // Choosing posts: back stops choosing first. Registered last, so it
+        // goes before the handlers above (the last enabled one wins).
+        BackHandler(enabled = hub.picking && hub.viewer == null && hub.web == null) { hub.clearPicks() }
 
         AnimatedContent(
             hub.tab,
