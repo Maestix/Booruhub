@@ -1,67 +1,77 @@
 # BooruHub
 
-An Android client for image boorus: **e621**, **Danbooru**, **Gelbooru** and **Rule34** in one app, alone or mixed into a single feed.
+Четыре бору в одном кармане: e621, Danbooru, Gelbooru и Rule34. Можно смотреть по одному, а можно смешать в общую ленту.
 
-The interface is in Russian. *Интерфейс на русском — описание на русском ниже.*
+<p align="center">
+  <img src="docs/screenshots/feed.webp" width="250" alt="Смешанная лента">
+  <img src="docs/screenshots/viewer.webp" width="250" alt="Просмотр поста">
+  <img src="docs/screenshots/tags.webp" width="250" alt="Теги поста">
+</p>
 
-> **18+.** These sites host adult content. BooruHub shows only what you ask the sites for, and a rating filter (Safe / Questionable / Explicit) is in the settings, but it is meant for adults.
+*English: an Android client for e621, Danbooru, Gelbooru and Rule34. The interface is Russian only for now. Build steps and the license are below and need no translation.*
 
-## Features
+> **18+.** На этих сайтах полно контента для взрослых. Приложение показывает только то, что вы у них запросили, а в настройках есть фильтр по рейтингу. Скриншоты сняты с одним Safe.
 
-- **Four sources, one feed.** Pick a site, or mix several: requests go out in parallel and the results are interleaved. Each search tab keeps its own source and mix.
-- **One search language.** Type e621-style queries (`rating:s`, `order:score`, `-tag`, `~a ~b`, `type:webm`…); BooruHub translates them for each site.
-- **Search tabs**, saved queries with **new-post notifications**, and search history.
-- **Viewer** with pinch and double-tap zoom, videos with **double-tap seeking** on the sides (5/10/15 s), translation **notes**, **pools**, parent/child posts and comments.
-- **Tag wiki**: long-press a tag to read what it means and see related tags.
-- **Favourites** from your e621 and Danbooru accounts; likes kept in the app for Gelbooru and Rule34, whose APIs take none.
-- **Collections** stored on the phone, **e621 sets**, and **batch actions**: long-press a tile and drag to pick many posts, then download, collect or favourite them.
-- **Downloads** in the background, **blacklist** (synced with e621 if you like), **best of day/week/month** on e621 and Danbooru.
-- **Backup** of settings, tabs, queries, collections and likes to a JSON file — API keys only if you ask.
+## Откуда взялось
 
-## Install
+Обычно выходит так: под e621 одно приложение, под Danbooru другое, Gelbooru открывается в браузере, и у каждого сайта свой синтаксис поиска. Надоело.
 
-Download the APK from [Releases](../../releases) and open it on the phone. Android 10 or newer, arm64.
+Здесь запрос пишется один раз, в стиле e621: `rating:s`, `order:score`, `-tag`, `~a ~b`. Под каждый сайт его переводит само приложение. Смешанная лента спрашивает все сайты одновременно, а если какой-то задумался, ждёт его не дольше шести секунд и показывает то, что успело прийти.
 
-Gelbooru and Rule34 answer only with an API key (free, from your account page on each site); enter it in **Настройки → Другие источники**. e621 and Danbooru work without one; signing in unlocks favourites and longer searches.
+## Что умеет
 
-## Building
+**Лента и поиск**
+- Вкладки, как в браузере, и у каждой свой набор сайтов. Между ними можно листать свайпом по строке запроса.
+- Сохранённые запросы. Примерно раз в час приложение проверяет их и присылает уведомление, если появилось новое.
+- «Лучшее» за день, неделю или месяц на e621 и Danbooru.
 
-The app is Jetpack Compose over a Rust core (`crates/core`: the sites' APIs, query translation, blacklist, storage) loaded through JNI (`crates/android`).
+**Просмотр**
+- Зум щипком и двойным тапом. В видео двойной тап по краю перематывает на 5, 10 или 15 секунд (шаг выбирается в настройках), каждый следующий тап добавляет ещё столько же.
+- Ноты с переводом прямо поверх картинки, пулы с кнопкой «читать дальше», родительские и дочерние посты, комментарии.
+- Долгое нажатие на тег открывает его вики. Можно наконец выяснить, что значит `blep`.
 
-You need:
+**Своё**
+- Избранное e621 и Danbooru подтягивается из аккаунта. Gelbooru и Rule34 через API сердечки ставить не дают, поэтому их лайки хранятся в приложении.
+- Коллекции на телефоне и сеты e621.
+- Зажмите плитку и, не отпуская, проведите пальцем: выделится сразу пачка. Её можно скачать, сложить в папку или отправить в избранное.
+- Чёрный список (по желанию синхронизируется с e621) и загрузки в фоне.
+- Резервная копия одним JSON-файлом: настройки, вкладки, запросы, коллекции, лайки. API-ключи попадут туда, только если сами включите.
+
+<p align="center">
+  <img src="docs/screenshots/wiki.webp" width="200" alt="Вики тега">
+  <img src="docs/screenshots/pick.webp" width="200" alt="Выделение пачкой">
+  <img src="docs/screenshots/sources.webp" width="200" alt="Источники">
+  <img src="docs/screenshots/search.webp" width="200" alt="Поиск">
+</p>
+
+## Установка
+
+APK лежит в [Releases](../../releases). Нужен Android 10 или новее, процессор arm64 (почти любой телефон последних лет).
+
+Gelbooru и Rule34 без API-ключа не отвечают. Ключ бесплатный: он есть в настройках вашего аккаунта на сайте, а в приложение вставляется в «Настройки → Другие источники». e621 и Danbooru работают и без входа. Вход нужен для избранного, а Danbooru без аккаунта пускает в поиск только два тега.
+
+## Сборка
+
+Интерфейс написан на Jetpack Compose. Под ним ядро на Rust: оно ходит в API сайтов, переводит запросы, разбирается с чёрным списком и хранит данные. Ядро живёт в `crates/core`, к Android его подключает `crates/android` через JNI.
+
+Понадобятся:
 
 - JDK 17
-- Android SDK with platform 37 and NDK `29.0.14206865`
-- Rust 1.88+ with the `aarch64-linux-android` target (`x86_64-linux-android` too for the emulator)
+- Android SDK с платформой 37 и NDK `29.0.14206865`
+- Rust 1.88+ с таргетом `aarch64-linux-android` (для эмулятора ещё `x86_64-linux-android`)
 
 ```sh
 cd android
-./gradlew assembleRelease              # phone (arm64)
-./gradlew assembleRelease -Pemulator   # also x86_64, for the emulator
+./gradlew assembleRelease              # для телефона
+./gradlew assembleRelease -Pemulator   # плюс x86_64 для эмулятора
 ```
 
-The APK lands in `android/app/build/outputs/apk/release/`. Without `android/keystore.properties` it is signed with the SDK's debug key — it runs, but will not install over the official releases.
+Готовый APK появится в `android/app/build/outputs/apk/release/`. Если нет файла `android/keystore.properties`, сборка подписывается отладочным ключом. Такой APK запустится, но поверх версии из Releases не встанет: Android откажется ставить приложение с другой подписью.
 
-Core tests: `cargo test -p booruhub-core`.
+Тесты ядра: `cargo test -p booruhub-core`.
 
-## License
+## Лицензия
 
-[GPL-3.0-or-later](LICENSE), with one additional term under section 7(b): versions you distribute must keep the author attribution in the app's “О программе” (About) section. See [NOTICE](NOTICE).
+[GPL-3.0-or-later](LICENSE) с одним дополнительным условием по пункту 7(b): в любой распространяемой версии должна остаться строка об авторе в разделе «О программе». Подробности в [NOTICE](NOTICE).
 
-BooruHub is not affiliated with e621, Danbooru, Gelbooru or Rule34.
-
----
-
-## По-русски
-
-Android-клиент для e621, Danbooru, Gelbooru и Rule34: каждый сайт отдельно или все в одной смешанной ленте.
-
-- Один язык запросов в стиле e621 — приложение переводит его под каждый сайт.
-- Вкладки поиска (у каждой свой источник), сохранённые запросы с уведомлениями о новых постах.
-- Просмотр с зумом, видео с перемоткой двойным тапом по краям, ноты, пулы, родственные посты, комментарии, вики тегов по долгому нажатию.
-- Избранное e621 и Danbooru из аккаунта, лайки для Gelbooru и Rule34 в приложении, коллекции, сеты e621.
-- Массовый выбор долгим нажатием, загрузки, чёрный список, лучшее за день/неделю/месяц, резервная копия.
-
-**Установка:** APK со страницы [Releases](../../releases). Для Gelbooru и Rule34 нужен API-ключ с сайта — вводится в Настройки → Другие источники.
-
-**Лицензия:** GPL-3.0 с дополнительным условием: в распространяемых версиях должно сохраняться указание автора в разделе «О программе».
+С e621, Danbooru, Gelbooru и Rule34 проект никак не связан, просто им пользуется.
