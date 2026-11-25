@@ -1,0 +1,5 @@
+# BooruHub's own code, all of it, compiled ahead of time when the app is
+# installed: the first scroll and the first post open without the JIT warming
+# up. Compose, Coil and Media3 ship their own profiles in their libraries.
+HSPLapp/booruhub/**;->**(**)**
+Lapp/booruhub/**;

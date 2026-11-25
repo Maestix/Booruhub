@@ -1,0 +1,34 @@
+BooruHub
+Copyright (C) 2026 Maestix — https://github.com/Maestix/Booruhub
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version. See the LICENSE file for the full text.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE.
+
+
+Additional terms (GPL-3.0, section 7(b))
+----------------------------------------
+
+Any version of this program you convey, modified or not, must keep the author
+attribution shown in the app's settings under "О программе" ("About"): the
+line naming Maestix as the original author. You may add your own name next to
+it; you may not remove or hide it.
+
+
+Third-party material
+--------------------
+
+Fonts in android/app/src/main/res/font/, each under the SIL Open Font License 1.1
+(https://openfontlicense.org):
+
+- Comfortaa — Copyright 2011 The Comfortaa Project Authors
+- Manrope — Copyright 2018 The Manrope Project Authors
+- JetBrains Mono — Copyright 2020 The JetBrains Mono Project Authors
+
+Rust and Android libraries keep their own licenses; see Cargo.lock and
+android/app/build.gradle.kts for the list.

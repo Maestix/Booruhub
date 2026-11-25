@@ -1,0 +1,30 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.5.2"
+edition = "2024"
+rust-version = "1.88"
+authors = ["Maestix"]
+license = "GPL-3.0-or-later"
+repository = "https://github.com/Maestix/Booruhub"
+
+[workspace.dependencies]
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Async, so a request the app no longer wants (a post swiped past) can be
+# dropped mid-flight instead of finishing. rustls, so the phone needs no
+# system TLS; gzip and brotli, so pages of tags come compressed.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "brotli"] }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "sync", "macros", "time", "fs", "io-util"] }
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
+jni = "0.21"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "unwind"

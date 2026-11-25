@@ -1,0 +1,16 @@
+[package]
+name = "booruhub-android"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "libbooruhub.so: the two calls the app makes into the core"
+
+[lib]
+name = "booruhub"
+crate-type = ["cdylib"]
+
+[dependencies]
+booruhub-core = { path = "../core" }
+jni.workspace = true

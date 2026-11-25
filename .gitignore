@@ -1,0 +1,9 @@
+/target
+/dist
+/design
+*.zip
+.codegraph/
+.idea/
+.vscode/
+*.keystore
+*.jks
