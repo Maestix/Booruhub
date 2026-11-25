@@ -24,8 +24,8 @@ android {
         // arm64 for phones, x86_64 for the emulator.
         ndk { abiFilters += abis }
         targetSdk = 37
-        versionCode = 15
-        versionName = "0.5.2"
+        versionCode = 16
+        versionName = "0.5.3"
     }
 
     // Release builds are signed with the key named in android/keystore.properties
