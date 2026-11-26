@@ -3,6 +3,7 @@
 //! [`Downloads::status`] while something runs and, once a file is done, moves
 //! it into the phone's gallery (that part is Android's).
 
+use crate::sync::Unpoisoned;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -50,9 +51,9 @@ impl Default for Downloads {
 impl Downloads {
     /// Starts (or resumes) a file. Must be called inside the core's runtime.
     pub fn start(&self, client: Arc<Client>, id: u64, url: String, part: PathBuf) {
-        let mut jobs = self.jobs.lock().unwrap();
+        let mut jobs = self.jobs.guard();
         if let Some(job) = jobs.get(&id)
-            && matches!(job.status.lock().unwrap().state, "queued" | "running" | "done")
+            && matches!(job.status.guard().state, "queued" | "running" | "done")
         {
             return;
         }
@@ -61,9 +62,9 @@ impl Downloads {
         let st = status.clone();
         let task = tokio::spawn(async move {
             let Ok(_slot) = slots.acquire_owned().await else { return };
-            st.lock().unwrap().state = "running";
+            st.guard().state = "running";
             let result = fetch(&client, &st, &url, &part).await;
-            let mut s = st.lock().unwrap();
+            let mut s = st.guard();
             s.speed = 0;
             match result {
                 Ok(()) => s.state = "done",
@@ -81,11 +82,11 @@ impl Downloads {
 
     /// Stops a file where it is; its ".part" stays for a resume.
     pub fn pause(&self, id: u64) {
-        if let Some(job) = self.jobs.lock().unwrap().get_mut(&id) {
+        if let Some(job) = self.jobs.guard().get_mut(&id) {
             if let Some(t) = job.task.take() {
                 t.abort();
             }
-            let mut s = job.status.lock().unwrap();
+            let mut s = job.status.guard();
             if matches!(s.state, "queued" | "running") {
                 s.state = "paused";
                 s.speed = 0;
@@ -95,7 +96,7 @@ impl Downloads {
 
     /// Forgets a file; with `delete`, its ".part" goes too.
     pub fn remove(&self, id: u64, part: Option<PathBuf>) {
-        if let Some(job) = self.jobs.lock().unwrap().remove(&id)
+        if let Some(job) = self.jobs.guard().remove(&id)
             && let Some(t) = job.task
         {
             t.abort();
@@ -106,7 +107,7 @@ impl Downloads {
     }
 
     pub fn status(&self) -> Vec<Status> {
-        self.jobs.lock().unwrap().values().map(|j| j.status.lock().unwrap().clone()).collect()
+        self.jobs.guard().values().map(|j| j.status.guard().clone()).collect()
     }
 }
 
@@ -130,7 +131,7 @@ async fn fetch(client: &Client, st: &Mutex<Status>, url: &str, part: &PathBuf) -
     let resumed = code == 206;
     let start = if resumed { have } else { 0 };
     {
-        let mut s = st.lock().unwrap();
+        let mut s = st.guard();
         s.done = start;
         s.total = start + resp.content_length().unwrap_or(0);
     }
@@ -145,7 +146,7 @@ async fn fetch(client: &Client, st: &Mutex<Status>, url: &str, part: &PathBuf) -
     let mut window = (Instant::now(), 0u64);
     while let Some(chunk) = resp.chunk().await? {
         out.write_all(&chunk).await.map_err(|e| Error::Net(format!("запись: {e}")))?;
-        let mut s = st.lock().unwrap();
+        let mut s = st.guard();
         s.done += chunk.len() as u64;
         window.1 += chunk.len() as u64;
         let dt = window.0.elapsed();
@@ -155,7 +156,7 @@ async fn fetch(client: &Client, st: &Mutex<Status>, url: &str, part: &PathBuf) -
         }
     }
     out.flush().await.map_err(|e| Error::Net(format!("запись: {e}")))?;
-    let mut s = st.lock().unwrap();
+    let mut s = st.guard();
     if s.total < s.done {
         s.total = s.done;
     }

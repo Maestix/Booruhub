@@ -27,10 +27,7 @@ impl Files {
     }
 
     pub fn load<T: DeserializeOwned + Default>(&self, name: &str) -> T {
-        fs::read(self.path(name))
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default()
+        fs::read(self.path(name)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
     }
 
     pub fn save<T: Serialize>(&self, name: &str, value: &T) {

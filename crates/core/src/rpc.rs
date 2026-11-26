@@ -7,6 +7,7 @@
 //! was called with its rid while it ran). The JNI side passes strings and nothing else,
 //! so the door stays two functions wide however much the core grows.
 
+use crate::sync::{Unpoisoned, UnpoisonedRw};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
@@ -127,7 +128,7 @@ impl Core {
     /// Stops the request with this rid, if it still runs: its call answers
     /// `cancelled` at once and the HTTP request is dropped mid-flight.
     pub fn cancel(&self, rid: u64) {
-        if let Some(stop) = self.running.lock().unwrap().remove(&rid) {
+        if let Some(stop) = self.running.guard().remove(&rid) {
             let _ = stop.send(());
         }
     }
@@ -149,7 +150,7 @@ impl Core {
                 let rid = r.get("rid").and_then(Value::as_u64);
                 let stop = rid.map(|id| {
                     let (tx, rx) = oneshot::channel();
-                    self.running.lock().unwrap().insert(id, tx);
+                    self.running.guard().insert(id, tx);
                     rx
                 });
                 let answer = self.rt.block_on(async {
@@ -170,7 +171,7 @@ impl Core {
                     }
                 });
                 if let Some(id) = rid {
-                    self.running.lock().unwrap().remove(&id);
+                    self.running.guard().remove(&id);
                 }
                 answer
             }
@@ -212,17 +213,13 @@ impl Core {
                 let limit = r.get("limit").and_then(Value::as_u64).unwrap_or(60) as u32;
                 let tags = str_arg(r, "tags")?;
                 let exclude = strings(r, "exclude");
-                let mut posts = if str_arg(r, "m")? == "posts_mix" {
+                let posts = if str_arg(r, "m")? == "posts_mix" {
                     let sites: Vec<Site> = strings(r, "sites").iter().filter_map(|c| Site::parse(c)).collect();
                     self.boorus.mix(&sites, tags, &exclude, page, limit).await?
                 } else {
                     self.boorus.posts(site_arg(r)?, tags, &exclude, page, limit).await?
                 };
-                let rules = self.rules.read().unwrap();
-                for p in &mut posts {
-                    p.blocked = rules.blocks(p);
-                }
-                Ok(to_json(&posts))
+                Ok(self.marked(posts))
             }
             "favorite" => {
                 let on = r.get("on").and_then(Value::as_bool).unwrap_or(true);
@@ -233,10 +230,7 @@ impl Core {
             "avatars" => {
                 let users: Vec<u64> = serde_json::from_value(r.get("users").cloned().unwrap_or_default()).map_err(|_| bad("users"))?;
                 let mut found = self.e621.avatars(&users).await?;
-                let rules = self.rules.read().unwrap();
-                for p in found.values_mut() {
-                    p.blocked = rules.blocks(p);
-                }
+                self.mark(found.values_mut());
                 // JSON keys are strings: the app reads the ids back from them.
                 Ok(Value::Object(found.into_iter().map(|(u, p)| (u.to_string(), to_json(&p))).collect()))
             }
@@ -296,13 +290,13 @@ impl Core {
             // --- the blacklist --------------------------------------------------
             "blacklist" => {
                 let lines: Vec<String> = serde_json::from_value(r.get("lines").cloned().unwrap_or_default()).map_err(|_| bad("lines"))?;
-                *self.rules.write().unwrap() = Rules::parse(&lines);
+                *self.rules.writer() = Rules::parse(&lines);
                 Ok(Value::Null)
             }
             // Every post the app has on screen, marked again in one call.
             "blocked" => {
                 let posts: Vec<Post> = serde_json::from_value(r.get("posts").cloned().unwrap_or_default()).map_err(|_| bad("posts"))?;
-                let rules = self.rules.read().unwrap();
+                let rules = self.rules.reader();
                 Ok(posts.iter().map(|p| Value::Bool(rules.blocks(p))).collect())
             }
 
@@ -353,7 +347,7 @@ impl Core {
             "saved_open" => {
                 let id = int_arg(r, "id")?;
                 let rating = r.get("rating").and_then(Value::as_str).unwrap_or("");
-                let q = self.saved.lock().unwrap().iter().find(|q| q.id == id).cloned().ok_or_else(|| bad("id"))?;
+                let q = self.saved.guard().iter().find(|q| q.id == id).cloned().ok_or_else(|| bad("id"))?;
                 let newest = self.newest(&q, rating).await?;
                 if newest > 0 {
                     self.write_saved(|s| {
@@ -443,29 +437,37 @@ impl Core {
         }
     }
 
-    /// Posts as the app gets them: the blacklist's mark on each.
-    fn marked(&self, mut posts: Vec<Post>) -> Value {
-        let rules = self.rules.read().unwrap();
-        for p in &mut posts {
+    /// Puts the blacklist's mark on each post.
+    fn mark<'a>(&self, posts: impl IntoIterator<Item = &'a mut Post>) {
+        let rules = self.rules.reader();
+        for p in posts {
             p.blocked = rules.blocks(p);
         }
+    }
+
+    /// Posts as the app gets them: the blacklist's mark on each.
+    fn marked(&self, mut posts: Vec<Post>) -> Value {
+        self.mark(&mut posts);
         to_json(&posts)
     }
 
     // --- saved queries ------------------------------------------------------------
 
     fn saved_json(&self) -> Value {
-        to_json(&*self.saved.lock().unwrap())
+        to_json(&*self.saved.guard())
     }
 
     fn write_saved(&self, change: impl FnOnce(&mut Vec<Saved>)) {
-        let mut s = self.saved.lock().unwrap();
+        let mut s = self.saved.guard();
         change(&mut s);
         self.files.save("saved", &*s);
     }
 
+    /// The query a watch asks: the saved one with the rating filter, newest
+    /// first. A sort typed into it (`order:score`) is left out, or the "newest"
+    /// post would be the best one and new posts would go uncounted.
     fn base(q: &Saved, rating: &str) -> String {
-        [q.query.as_str(), rating].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" ")
+        q.query.split_whitespace().filter(|t| !t.to_ascii_lowercase().starts_with("order:")).chain(rating.split_whitespace()).collect::<Vec<_>>().join(" ")
     }
 
     fn site_of(q: &Saved) -> Site {
@@ -505,20 +507,10 @@ impl Core {
     /// two requests a second.
     async fn check_saved(&self, only: Option<i64>, rating: &str) {
         let now = now_ms();
-        let due: Vec<Saved> = self
-            .saved
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|q| q.watch && only.map_or(now - q.checked > FRESH_FOR_MS, |id| q.id == id))
-            .cloned()
-            .collect();
+        let due: Vec<Saved> =
+            self.saved.lock().unwrap().iter().filter(|q| q.watch && only.map_or(now - q.checked > FRESH_FOR_MS, |id| q.id == id)).cloned().collect();
         for pair in due.chunks(2) {
-            let results: Vec<Saved> = futures_util::future::join_all(pair.iter().map(|q| self.check_one(q, rating)))
-                .await
-                .into_iter()
-                .flatten()
-                .collect();
+            let results: Vec<Saved> = futures_util::future::join_all(pair.iter().map(|q| self.check_one(q, rating))).await.into_iter().flatten().collect();
             self.write_saved(|s| {
                 for next in results {
                     if let Some(q) = s.iter_mut().find(|q| q.id == next.id) {
@@ -535,11 +527,11 @@ impl Core {
     // --- collections --------------------------------------------------------------
 
     fn colls_json(&self) -> Value {
-        to_json(&*self.colls.lock().unwrap())
+        to_json(&*self.colls.guard())
     }
 
     fn write_colls(&self, change: impl FnOnce(&mut Vec<Coll>)) {
-        let mut c = self.colls.lock().unwrap();
+        let mut c = self.colls.guard();
         change(&mut c);
         self.files.save("collections", &*c);
     }
@@ -560,6 +552,13 @@ mod tests {
     fn ok(answer: String) -> Value {
         let v: Value = serde_json::from_str(&answer).unwrap();
         v.get("ok").cloned().unwrap_or_else(|| panic!("not ok: {answer}"))
+    }
+
+    #[test]
+    fn a_watch_asks_newest_first() {
+        let q = |query: &str| serde_json::from_value::<Saved>(json!({ "id": 1, "name": "q", "query": query })).unwrap();
+        assert_eq!(Core::base(&q("fox order:score  solo"), "-rating:e"), "fox solo -rating:e");
+        assert_eq!(Core::base(&q(""), ""), "");
     }
 
     #[test]

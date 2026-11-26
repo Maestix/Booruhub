@@ -25,13 +25,7 @@ fn string(env: &mut JNIEnv, value: &JString) -> Option<String> {
 
 /// Answers whether the core is ready. A second call keeps the first core.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_app_booruhub_Core_init(
-    mut env: JNIEnv,
-    _this: JObject,
-    dir: JString,
-    agent: JString,
-    proxy: JString,
-) -> jboolean {
+pub extern "system" fn Java_app_booruhub_Core_init(mut env: JNIEnv, _this: JObject, dir: JString, agent: JString, proxy: JString) -> jboolean {
     let (Some(dir), Some(agent)) = (string(&mut env, &dir), string(&mut env, &agent)) else {
         return 0;
     };
@@ -49,8 +43,9 @@ pub extern "system" fn Java_app_booruhub_Core_call(mut env: JNIEnv, _this: JObje
     let answer = match (CORE.get(), string(&mut env, &request)) {
         (None, _) => r#"{"err":{"kind":"bad","msg":"ядро не запущено"}}"#.to_owned(),
         (_, None) => r#"{"err":{"kind":"bad","msg":"пустой запрос"}}"#.to_owned(),
-        (Some(core), Some(req)) => catch_unwind(AssertUnwindSafe(|| core.call(&req)))
-            .unwrap_or_else(|_| r#"{"err":{"kind":"bad","msg":"ядро упало на этом запросе"}}"#.to_owned()),
+        (Some(core), Some(req)) => {
+            catch_unwind(AssertUnwindSafe(|| core.call(&req))).unwrap_or_else(|_| r#"{"err":{"kind":"bad","msg":"ядро упало на этом запросе"}}"#.to_owned())
+        }
     };
     env.new_string(answer).map(|s| s.into_raw()).unwrap_or(std::ptr::null_mut())
 }

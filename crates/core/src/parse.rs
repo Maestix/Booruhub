@@ -21,9 +21,14 @@ pub fn array_in(value: Value, key: &str) -> Vec<Value> {
     }
 }
 
-pub fn posts(text: &str) -> Vec<Post> {
-    let Ok(value) = serde_json::from_str::<Value>(text) else { return Vec::new() };
-    array_in(value, "posts").into_iter().filter_map(post).collect()
+/// None when the answer is not JSON at all (a maintenance page, say), so
+/// that reads as a failure rather than as "nothing found".
+pub fn posts(text: &str) -> Option<Vec<Post>> {
+    if text.trim().is_empty() {
+        return Some(Vec::new());
+    }
+    let value = serde_json::from_str::<Value>(text).ok()?;
+    Some(array_in(value, "posts").into_iter().filter_map(post).collect())
 }
 
 /// A string field, or None when missing, null or blank.
@@ -33,6 +38,11 @@ fn s(o: &Value, key: &str) -> Option<String> {
 
 fn int(o: &Value, key: &str) -> i64 {
     o.get(key).and_then(Value::as_i64).unwrap_or(0)
+}
+
+/// A width, height or size: 0 when missing or nonsense (negative).
+fn whole<T: TryFrom<i64> + Default>(o: &Value, key: &str) -> T {
+    T::try_from(int(o, key)).unwrap_or_default()
 }
 
 // Each post is taken by value: its tag lists move into the Post instead of
@@ -66,18 +76,15 @@ fn new_shape(o: &Value, tags: Option<Value>) -> Option<Post> {
 
     // A phone plays the 720p mp4 sample best; then a smaller one; then the mp4
     // variant; then the file itself.
-    let video = files
-        .get("video")
-        .filter(|v| v.get("has").and_then(Value::as_bool).unwrap_or(true))
-        .and_then(|v| {
-            let samples = v.get("samples");
-            samples
-                .and_then(|x| x.get("720p"))
-                .and_then(|x| s(x, "url"))
-                .or_else(|| samples.and_then(|x| x.get("480p")).and_then(|x| s(x, "url")))
-                .or_else(|| v.get("variants").and_then(|x| x.get("mp4")).and_then(|x| s(x, "url")))
-                .or_else(|| v.get("original").and_then(|x| s(x, "url")))
-        });
+    let video = files.get("video").filter(|v| v.get("has").and_then(Value::as_bool).unwrap_or(true)).and_then(|v| {
+        let samples = v.get("samples");
+        samples
+            .and_then(|x| x.get("720p"))
+            .and_then(|x| s(x, "url"))
+            .or_else(|| samples.and_then(|x| x.get("480p")).and_then(|x| s(x, "url")))
+            .or_else(|| v.get("variants").and_then(|x| x.get("mp4")).and_then(|x| s(x, "url")))
+            .or_else(|| v.get("original").and_then(|x| s(x, "url")))
+    });
 
     let tags = match tags {
         Some(flat @ Value::Array(_)) => Map::from_iter([(FLAT.to_owned(), flat)]),
@@ -92,9 +99,9 @@ fn new_shape(o: &Value, tags: Option<Value>) -> Option<Post> {
         file: s(original, "url"),
         video,
         ext: s(meta, "ext").unwrap_or_default(),
-        w: int(original, "width") as u32,
-        h: int(original, "height") as u32,
-        size: int(meta, "size") as u64,
+        w: whole(original, "width"),
+        h: whole(original, "height"),
+        size: whole(meta, "size"),
         rating: s(o, "rating").unwrap_or_else(|| "s".into()),
         score: stats.get("score").map(|v| int(v, "total")).unwrap_or(0),
         favs: int(stats, "fav_count"),
@@ -117,11 +124,11 @@ fn old_shape(o: &Value, tags: Option<Value>) -> Option<Post> {
         preview: o.get("preview").and_then(|v| s(v, "url")),
         sample: sample.and_then(|v| s(v, "url")),
         file: s(file, "url"),
-        video: s(file, "url"),
+        video: s(file, "url").filter(|_| matches!(s(file, "ext").as_deref(), Some("webm" | "mp4"))),
         ext: s(file, "ext").unwrap_or_default(),
-        w: int(file, "width") as u32,
-        h: int(file, "height") as u32,
-        size: int(file, "size") as u64,
+        w: whole(file, "width"),
+        h: whole(file, "height"),
+        size: whole(file, "size"),
         rating: s(o, "rating").unwrap_or_else(|| "s".into()),
         score: o.get("score").map(|v| int(v, "total")).unwrap_or(0),
         favs: int(o, "fav_count"),
@@ -140,30 +147,13 @@ fn family(o: &Value) -> Post {
     let rel = o.get("relationships");
     let has = |k: &str| o.pointer(&format!("/has/{k}")).and_then(Value::as_bool).unwrap_or(false);
     Post {
-        id: 0,
-        site: String::new(),
-        preview: None,
-        sample: None,
-        file: None,
-        video: None,
-        ext: String::new(),
-        w: 0,
-        h: 0,
-        size: 0,
-        rating: String::new(),
-        score: 0,
-        favs: 0,
-        fav: false,
-        comments: 0,
-        about: String::new(),
-        tags: Map::new(),
-        blocked: false,
         parent: rel.and_then(|r| r.get("parent_id")).and_then(Value::as_u64).unwrap_or(0),
         children: has("children")
             || rel.and_then(|r| r.get("children")).and_then(Value::as_array).is_some_and(|c| !c.is_empty())
             || o.get("has_children").and_then(Value::as_bool).unwrap_or(false),
         notes: has("notes") || o.get("has_notes").and_then(Value::as_bool).unwrap_or(false),
         pools: o.get("pools").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).collect()).unwrap_or_default(),
+        ..Post::default()
     }
 }
 
@@ -187,7 +177,7 @@ mod tests {
 
     #[test]
     fn reads_the_2026_shape() {
-        let p = &posts(NEW)[0];
+        let p = &posts(NEW).unwrap()[0];
         assert_eq!(p.id, 6874802);
         assert_eq!(p.video.as_deref(), Some("https://s/720.mp4"));
         assert_eq!(p.sample.as_deref(), Some("https://s/s.webp"));
@@ -198,7 +188,7 @@ mod tests {
 
     #[test]
     fn reads_the_old_shape_with_categories_in_order() {
-        let p = &posts(OLD)[0];
+        let p = &posts(OLD).unwrap()[0];
         assert_eq!(p.file.as_deref(), Some("https://s/f.png"));
         assert_eq!(p.tags.keys().collect::<Vec<_>>(), ["artist", "general"]);
     }

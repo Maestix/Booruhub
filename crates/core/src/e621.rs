@@ -4,6 +4,7 @@
 //! solved the challenge in the app's WebView, so the client sends that agent,
 //! and the app hands over the WebView's cookies with every call.
 
+use crate::sync::UnpoisonedRw;
 use std::collections::HashMap;
 use std::sync::RwLock;
 use std::time::Duration;
@@ -30,16 +31,28 @@ pub enum Error {
     Net(String),
 }
 
-impl From<reqwest::Error> for Error {
-    fn from(e: reqwest::Error) -> Self {
+impl Error {
+    /// A request to `site` that got no answer, said in the words the app shows.
+    pub(crate) fn net(site: &str, e: &reqwest::Error) -> Self {
         let text = format!("{e:?}");
         Error::Net(if text.contains("dns error") || text.contains("failed to lookup") {
-            "Нет сети: e621.net не находится".into()
+            format!("Нет сети: {site} не находится")
         } else if e.is_timeout() || e.is_connect() {
-            "e621 не отвечает — проверьте сеть".into()
+            format!("{site} не отвечает — проверьте сеть")
         } else {
             e.to_string()
         })
+    }
+}
+
+/// An answer that is not what the API sends: an empty feed would hide it.
+pub(crate) fn garbled(site: &str) -> Error {
+    Error::Api(format!("{site} прислал непонятный ответ — попробуйте ещё раз"))
+}
+
+impl From<reqwest::Error> for Error {
+    fn from(e: reqwest::Error) -> Self {
+        Self::net("e621", &e)
     }
 }
 
@@ -84,11 +97,11 @@ impl Client {
     }
 
     pub fn set_auth(&self, auth: Option<(String, String)>) {
-        *self.auth.write().unwrap() = auth;
+        *self.auth.writer() = auth;
     }
 
     pub fn set_cookies(&self, cookies: &str) {
-        *self.cookies.write().unwrap() = cookies.to_owned();
+        *self.cookies.writer() = cookies.to_owned();
     }
 
     fn request(&self, method: Method, path: &str, auth: Option<&(String, String)>) -> RequestBuilder {
@@ -99,11 +112,11 @@ impl Client {
             .timeout(Duration::from_secs(40))
             .header(header::USER_AGENT, &self.agent)
             .header(header::ACCEPT, "application/json");
-        let cookies = self.cookies.read().unwrap();
+        let cookies = self.cookies.reader();
         if !cookies.is_empty() {
             r = r.header(header::COOKIE, cookies.as_str());
         }
-        let own = self.auth.read().unwrap().clone();
+        let own = self.auth.reader().clone();
         if let Some((user, key)) = auth.cloned().or(own) {
             r = r.basic_auth(user, Some(key));
         }
@@ -127,7 +140,7 @@ impl Client {
         if let Some(referer) = crate::boorus::referer_for(&host) {
             r = r.header(header::REFERER, referer);
         }
-        let cookies = self.cookies.read().unwrap();
+        let cookies = self.cookies.reader();
         if ours && !cookies.is_empty() {
             r = r.header(header::COOKIE, cookies.as_str());
         }
@@ -169,7 +182,7 @@ impl Client {
 
     pub async fn posts(&self, tags: &str, page: u32, limit: u32) -> Result<Vec<Post>> {
         let body = self.get("/posts.json", &[("tags", tags.trim().into()), ("page", page.to_string()), ("limit", limit.to_string())]).await?;
-        Ok(parse::posts(&body))
+        parse::posts(&body).ok_or_else(|| garbled("e621"))
     }
 
     /// Fails unless e621 accepts the pair: a signed request with a wrong key gets 401.
@@ -197,12 +210,7 @@ impl Client {
             let body = self
                 .get(
                     "/comments.json",
-                    &[
-                        ("group_by", "comment".into()),
-                        ("search[post_id]", post.to_string()),
-                        ("limit", PAGE.to_string()),
-                        ("page", page.to_string()),
-                    ],
+                    &[("group_by", "comment".into()), ("search[post_id]", post.to_string()), ("limit", PAGE.to_string()), ("page", page.to_string())],
                 )
                 .await?;
             let got = serde_json::from_str::<Value>(&body).map(|v| parse::array_in(v, "comments")).unwrap_or_default();
@@ -318,20 +326,8 @@ impl Client {
     pub async fn account_blacklist(&self, user: &str) -> Result<Vec<String>> {
         let body = self.get("/users.json", &[("search[name_matches]", user.into()), ("limit", "1".into())]).await?;
         let found = serde_json::from_str::<Value>(&body).map(|v| parse::array_in(v, "users")).unwrap_or_default();
-        let id = found
-            .first()
-            .and_then(|u| u.get("id"))
-            .and_then(Value::as_u64)
-            .ok_or_else(|| Error::Api(format!("e621 не нашёл пользователя {user}")))?;
+        let id = found.first().and_then(|u| u.get("id")).and_then(Value::as_u64).ok_or_else(|| Error::Api(format!("e621 не нашёл пользователя {user}")))?;
         let me: Value = serde_json::from_str(&self.get(&format!("/users/{id}.json"), &[]).await?).unwrap_or(Value::Null);
-        Ok(me
-            .get("blacklisted_tags")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty())
-            .map(str::to_owned)
-            .collect())
+        Ok(me.get("blacklisted_tags").and_then(Value::as_str).unwrap_or_default().lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned).collect())
     }
 }

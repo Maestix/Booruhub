@@ -16,6 +16,7 @@ mod model;
 mod parse;
 mod rpc;
 mod store;
+mod sync;
 
 pub use blacklist::Rules;
 pub use boorus::{Boorus, Site};
@@ -25,8 +26,5 @@ pub use rpc::Core;
 
 /// Milliseconds since the epoch, as the app's own clocks count.
 pub(crate) fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }

@@ -25,11 +25,7 @@ impl Boorus {
     /// The parent and all its children (the post among them), parent first.
     pub async fn family(&self, site: Site, post: u64, parent: u64) -> Result<Vec<Post>> {
         let root = if parent > 0 { parent } else { post };
-        let (head, kids) = join(
-            self.posts(site, &format!("id:{root}"), &[], 1, 1),
-            self.posts(site, &format!("parent:{root}"), &[], 1, 100),
-        )
-        .await;
+        let (head, kids) = join(self.posts(site, &format!("id:{root}"), &[], 1, 1), self.posts(site, &format!("parent:{root}"), &[], 1, 100)).await;
         // The parent may be gone; its children are still a family.
         let mut out = head.unwrap_or_default();
         let mut kids = kids?;
@@ -76,11 +72,7 @@ impl Boorus {
         match site {
             Site::E621 | Site::Danbooru => {
                 let q = [("search[post_id]", post.to_string()), ("search[is_active]", "true".into()), ("limit", "200".into())];
-                let body = if site == Site::E621 {
-                    self.e621.get("/notes.json", &q).await?
-                } else {
-                    self.run(site, self.get(site, "/notes.json", &q)).await?
-                };
+                let body = if site == Site::E621 { self.e621.get("/notes.json", &q).await? } else { self.run(site, self.get(site, "/notes.json", &q)).await? };
                 let list = serde_json::from_str::<Value>(&body).map(|v| crate::parse::array_in(v, "notes")).unwrap_or_default();
                 Ok(list
                     .iter()
@@ -106,11 +98,9 @@ impl Boorus {
         let tag = tag.trim().to_lowercase();
         let (raw, related, count) = match site {
             Site::E621 => {
-                let (page, info) = join(
-                    self.e621.get("/wiki_pages.json", &[("search[title]", tag.clone())]),
-                    self.e621.get("/tags.json", &[("search[name]", tag.clone())]),
-                )
-                .await;
+                let (page, info) =
+                    join(self.e621.get("/wiki_pages.json", &[("search[title]", tag.clone())]), self.e621.get("/tags.json", &[("search[name]", tag.clone())]))
+                        .await;
                 let page = serde_json::from_str::<Value>(&page?).map(|v| crate::parse::array_in(v, "wiki_pages")).unwrap_or_default();
                 let info = info.ok().and_then(|b| serde_json::from_str::<Value>(&b).ok()).map(|v| crate::parse::array_in(v, "tags")).unwrap_or_default();
                 let info = info.first();
@@ -155,12 +145,14 @@ impl Boorus {
         match site {
             // e621's popular page is one page.
             Site::E621 if page > 1 => Ok(Vec::new()),
-            Site::E621 => Ok(crate::parse::posts(&self.e621.get("/popular.json", &[("scale", scale.into())]).await?)),
+            Site::E621 => {
+                let body = self.e621.get("/popular.json", &[("scale", scale.into())]).await?;
+                crate::parse::posts(&body).ok_or_else(|| garbled("e621"))
+            }
             Site::Danbooru => {
                 let q = [("scale", scale.to_owned()), ("page", page.to_string())];
                 let body = self.run(site, self.get(site, "/explore/posts/popular.json", &q)).await?;
-                let list = serde_json::from_str::<Value>(&body).map(|v| crate::parse::array_in(v, "posts")).unwrap_or_default();
-                Ok(list.iter().filter_map(danbooru_post).collect())
+                Ok(listed(site, &body, "posts")?.iter().filter_map(danbooru_post).collect())
             }
             _ => Err(Error::Api(format!("У {} нет раздела «Популярное»", site.name()))),
         }
@@ -263,10 +255,7 @@ mod tests {
         let (body, links) = dtext(
             "thumb #2443148 thumb #676384\n\nA [[male]]-bodied character, see [[male_(lore)|canonically male]].\n\nh4. See also:\n* [[crossdressing]]\n[b]Note[/b] \"site\":https://e621.net here {{femboy rating:s}}\n[section=More]x[/section]",
         );
-        assert_eq!(
-            body,
-            "A male-bodied character, see canonically male.\n\nSee also:\n• crossdressing\nNote site here femboy rating:s\nMorex"
-        );
+        assert_eq!(body, "A male-bodied character, see canonically male.\n\nSee also:\n• crossdressing\nNote site here femboy rating:s\nMorex");
         assert_eq!(links, ["male", "male_(lore)", "crossdressing"]);
     }
 }

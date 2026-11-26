@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 /// A post, whichever shape e621 sent it in.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Post {
     pub id: u64,
     /// Which booru the post is from (`Site::code`); ids repeat across sites.
@@ -82,11 +82,7 @@ pub const TAG_ORDER: [&str; 8] = ["artist", "copyright", "character", "species",
 impl Post {
     /// Every tag, whatever category it sits under.
     pub fn all_tags(&self) -> impl Iterator<Item = &str> {
-        self.tags
-            .values()
-            .filter_map(|v| v.as_array())
-            .flatten()
-            .filter_map(|t| t.as_str())
+        self.tags.values().filter_map(|v| v.as_array()).flatten().filter_map(|t| t.as_str())
     }
 }
 

@@ -11,6 +11,7 @@
 //! - Gelbooru and Rule34: the old Gelbooru API, which by 2026 answers only
 //!   with `user_id` and `api_key` in the query. No favourites through it.
 
+use crate::sync::UnpoisonedRw;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -18,7 +19,7 @@ use std::time::Duration;
 use reqwest::{Method, RequestBuilder, header};
 use serde_json::{Map, Value};
 
-use crate::e621::{Client, Error, Result, is_challenge};
+use crate::e621::{Client, Error, Result, garbled, is_challenge};
 use crate::model::{Comment, FLAT, Post, TagHint};
 
 mod extras;
@@ -123,11 +124,11 @@ impl Boorus {
                 }
             }
         }
-        *self.logins.write().unwrap() = map;
+        *self.logins.writer() = map;
     }
 
     fn login(&self, site: Site) -> Option<Pair> {
-        self.logins.read().unwrap().get(&site).cloned()
+        self.logins.reader().get(&site).cloned()
     }
 
     fn request(&self, site: Site, method: Method, url: &str, auth: Option<Pair>) -> RequestBuilder {
@@ -151,12 +152,14 @@ impl Boorus {
     }
 
     async fn run(&self, site: Site, r: RequestBuilder) -> Result<String> {
-        let resp = r.send().await?;
+        // Named after the site asked: `?` alone would blame e621 for Danbooru's silence.
+        let net = |e: reqwest::Error| Error::net(site.name(), &e);
+        let resp = r.send().await.map_err(net)?;
         let status = resp.status();
         if is_challenge(&resp) {
             return Err(Error::Api(format!("{} просит проверку Cloudflare — попробуйте позже", site.name())));
         }
-        let body = resp.text().await?;
+        let body = resp.text().await.map_err(net)?;
         // The Gelbooru API says so with a 200 and a JSON string.
         let refused = body.trim_start().starts_with("\"Missing authentication") || matches!(status.as_u16(), 401 | 403);
         if refused {
@@ -190,14 +193,16 @@ impl Boorus {
             Site::E621 => self.e621.posts(&q, page, limit).await,
             Site::Danbooru => {
                 let body = self
-                    .run(site, self.get(site, "/posts.json", &[
-                        ("page", if q.contains("random:") { "1".into() } else { page.to_string() }),
-                        ("tags", q),
-                        ("limit", limit.min(200).to_string()),
-                    ]))
+                    .run(
+                        site,
+                        self.get(
+                            site,
+                            "/posts.json",
+                            &[("page", if q.contains("random:") { "1".into() } else { page.to_string() }), ("tags", q), ("limit", limit.min(200).to_string())],
+                        ),
+                    )
                     .await?;
-                let list = serde_json::from_str::<Value>(&body).map(|v| crate::parse::array_in(v, "posts")).unwrap_or_default();
-                Ok(list.iter().filter_map(danbooru_post).collect())
+                Ok(listed(site, &body, "posts")?.iter().filter_map(danbooru_post).collect())
             }
             Site::Gelbooru | Site::Rule34 => {
                 let query = [
@@ -212,8 +217,7 @@ impl Boorus {
                 let body = self.run(site, self.get(site, "/index.php", &query)).await?;
                 // Gelbooru wraps the list in {"post": [...]}; Rule34 sends it bare,
                 // or nothing at all when nothing matches.
-                let list = serde_json::from_str::<Value>(&body).map(|v| crate::parse::array_in(v, "post")).unwrap_or_default();
-                Ok(list.iter().filter_map(|o| gel_post(site, o)).collect())
+                Ok(listed(site, &body, "post")?.iter().filter_map(|o| gel_post(site, o)).collect())
             }
         }
     }
@@ -228,11 +232,8 @@ impl Boorus {
         // All sites at once. Once one has answered, the rest get a few seconds
         // more: a site that hangs is left out of this page instead of holding
         // the whole feed until its timeout.
-        let mut pending: futures_util::stream::FuturesUnordered<_> = sites
-            .iter()
-            .enumerate()
-            .map(|(i, &s)| async move { (i, self.posts(s, tags, exclude, page, each).await) })
-            .collect();
+        let mut pending: futures_util::stream::FuturesUnordered<_> =
+            sites.iter().enumerate().map(|(i, &s)| async move { (i, self.posts(s, tags, exclude, page, each).await) }).collect();
         let mut done = Vec::new();
         let mut deadline: Option<tokio::time::Instant> = None;
         loop {
@@ -481,11 +482,11 @@ pub(crate) fn translate(site: Site, tags: &str, exclude: &[String], logged_in: b
     // File types gather into one tag each way, so Danbooru counts them once.
     let (mut want, mut skip) = (BTreeSet::new(), BTreeSet::new());
     for t in words {
-        if site.gel() {
-            if let Some(b) = t.strip_prefix('~').filter(|b| !b.is_empty()) {
-                any.push(b);
-                continue;
-            }
+        if site.gel()
+            && let Some(b) = t.strip_prefix('~').filter(|b| !b.is_empty())
+        {
+            any.push(b);
+            continue;
         }
         let (neg, body) = match t.strip_prefix('-') {
             Some(b) => (true, b),
@@ -612,6 +613,17 @@ fn sort(site: Site, o: &str) -> Option<String> {
 // --- the answers -----------------------------------------------------------------
 
 /// A string field, or "" when missing; the old API sends numbers as strings.
+/// The list of `key` in a site's answer. Nothing at all is an empty list;
+/// something that is not JSON is an error, not "nothing found", or the feed
+/// would end at the first maintenance page.
+fn listed(site: Site, body: &str, key: &str) -> Result<Vec<Value>> {
+    if body.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let v = serde_json::from_str::<Value>(body).map_err(|_| garbled(site.name()))?;
+    Ok(crate::parse::array_in(v, key))
+}
+
 fn text(o: &Value, key: &str) -> String {
     match o.get(key) {
         Some(Value::String(s)) => s.clone(),
@@ -634,6 +646,11 @@ fn num(o: &Value, key: &str) -> Option<i64> {
 }
 
 /// A yes/no the old API may send as a bool, "true" or 1.
+/// A width, height, size or id: 0 when missing or nonsense (negative).
+fn whole<T: TryFrom<i64> + Default>(o: &Value, key: &str) -> T {
+    num(o, key).and_then(|v| T::try_from(v).ok()).unwrap_or_default()
+}
+
 fn truthy(o: &Value, key: &str) -> bool {
     match o.get(key) {
         Some(Value::Bool(b)) => *b,
@@ -663,11 +680,7 @@ fn danbooru_post(o: &Value) -> Option<Post> {
     let file = opt(o, "file_url");
     let large = opt(o, "large_file_url");
     let variants = o.pointer("/media_asset/variants").and_then(Value::as_array);
-    let variant = |kind: &str| {
-        variants
-            .and_then(|v| v.iter().find(|x| x.get("type").and_then(Value::as_str) == Some(kind)))
-            .and_then(|x| opt(x, "url"))
-    };
+    let variant = |kind: &str| variants.and_then(|v| v.iter().find(|x| x.get("type").and_then(Value::as_str) == Some(kind))).and_then(|x| opt(x, "url"));
     let ext = text(o, "file_ext");
     let (video, ext) = match ext.as_str() {
         "mp4" | "webm" => (file.clone(), ext),
@@ -700,22 +713,19 @@ fn danbooru_post(o: &Value) -> Option<Post> {
         file,
         video,
         ext,
-        w: num(o, "image_width").unwrap_or(0) as u32,
-        h: num(o, "image_height").unwrap_or(0) as u32,
-        size: num(o, "file_size").unwrap_or(0) as u64,
+        w: whole(o, "image_width"),
+        h: whole(o, "image_height"),
+        size: whole(o, "file_size"),
         rating: fold_rating(&text(o, "rating")),
         score: num(o, "score").unwrap_or(0),
         favs: num(o, "fav_count").unwrap_or(0),
-        fav: false,
         // Danbooru does not count a post's comments in its answer.
         comments: -1,
-        about: String::new(),
         tags,
-        blocked: false,
-        parent: num(o, "parent_id").unwrap_or(0).max(0) as u64,
+        parent: whole(o, "parent_id"),
         children: truthy(o, "has_children"),
         notes: opt(o, "last_noted_at").is_some(),
-        pools: Vec::new(),
+        ..Post::default()
     })
 }
 
@@ -734,21 +744,16 @@ fn gel_post(site: Site, o: &Value) -> Option<Post> {
         file,
         video,
         ext,
-        w: num(o, "width").unwrap_or(0) as u32,
-        h: num(o, "height").unwrap_or(0) as u32,
-        size: 0,
+        w: whole(o, "width"),
+        h: whole(o, "height"),
         rating: fold_rating(&text(o, "rating")),
         score: num(o, "score").unwrap_or(0),
-        favs: 0,
-        fav: false,
         comments: num(o, "comment_count").unwrap_or(-1),
-        about: String::new(),
         tags: Map::from_iter([(FLAT.to_owned(), Value::Array(tags))]),
-        blocked: false,
-        parent: num(o, "parent_id").unwrap_or(0).max(0) as u64,
+        parent: whole(o, "parent_id"),
         children: truthy(o, "has_children"),
         notes: truthy(o, "has_notes"),
-        pools: Vec::new(),
+        ..Post::default()
     })
 }
 
@@ -945,6 +950,14 @@ mod tests {
     }
 
     #[test]
+    fn a_page_that_is_not_json_is_an_error() {
+        assert!(listed(Site::Rule34, "", "post").unwrap().is_empty());
+        assert_eq!(listed(Site::Gelbooru, r#"{"post":[{"id":1}]}"#, "post").unwrap().len(), 1);
+        let e = listed(Site::Danbooru, "<html>Down for maintenance</html>", "posts").unwrap_err();
+        assert!(e.to_string().starts_with("Danbooru"), "{e}");
+    }
+
+    #[test]
     fn reads_danbooru_posts() {
         let v: Value = serde_json::from_str(
             r#"{"id":5,"file_ext":"jpg","rating":"g","score":3,"fav_count":2,"image_width":10,"image_height":20,
@@ -954,7 +967,10 @@ mod tests {
         )
         .unwrap();
         let p = danbooru_post(&v).unwrap();
-        assert_eq!((p.site.as_str(), p.rating.as_str(), p.preview.as_deref(), p.sample.as_deref()), ("danbooru", "s", Some("https://cdn/p.jpg"), Some("https://cdn/l.jpg")));
+        assert_eq!(
+            (p.site.as_str(), p.rating.as_str(), p.preview.as_deref(), p.sample.as_deref()),
+            ("danbooru", "s", Some("https://cdn/p.jpg"), Some("https://cdn/l.jpg"))
+        );
         assert_eq!(p.tags.keys().collect::<Vec<_>>(), ["artist", "general"]);
     }
 

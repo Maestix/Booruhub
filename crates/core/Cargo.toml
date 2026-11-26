@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "BooruHub's core: e621's API, its answers, the blacklist, saved queries and collections"
 
 [dependencies]
