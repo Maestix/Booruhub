@@ -1,5 +1,6 @@
 package app.booruhub
 
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
@@ -141,6 +142,8 @@ fun ViewerScreen(hub: Hub, feed: Feed, start: Int) {
     var tagFor by remember { mutableStateOf<Pair<String, String>?>(null) }
     var showNotes by remember { mutableStateOf(true) }
     var panel by remember { mutableStateOf(0) }
+    // A picture zoomed in gets the whole screen: the bar and the panel step aside.
+    var zoomed by remember { mutableStateOf(false) }
     // The page whose full picture has arrived; only then is the next one fetched.
     var loadedPage by remember { mutableStateOf(-1) }
     val ctx = LocalContext.current
@@ -163,7 +166,7 @@ fun ViewerScreen(hub: Hub, feed: Feed, start: Int) {
         if (notes?.first == p.key) return@LaunchedEffect
         notes = runCatching { p.key to E621.notes(p) }.getOrNull()
     }
-    LaunchedEffect(pager.currentPage) { chrome = true }
+    LaunchedEffect(pager.currentPage) { chrome = true; zoomed = false }
     LaunchedEffect(touches, touching, chrome, playing, onVideo, comments, collect) {
         if (touching || !chrome || !onVideo || !playing || comments || collect) return@LaunchedEffect
         delay(3000)
@@ -228,7 +231,10 @@ fun ViewerScreen(hub: Hub, feed: Feed, start: Int) {
                 // the grid's thumbnail, so one swiped past stops downloading.
                 val url = if (page == pager.currentPage) p.viewUrl(hub.original) else p.thumbUrl
                 val shown = notes?.takeIf { showNotes && it.first == p.key && page == pager.currentPage }?.second.orEmpty()
-                Still(url, p.thumbUrl, p.ratio, panel, shown, p.width, p.height) { if (page == pager.currentPage) loadedPage = page }
+                Still(
+                    url, p.thumbUrl, p.ratio, if (zoomed) 0 else panel, shown, p.width, p.height,
+                    onZoomed = { if (page == pager.currentPage) zoomed = it },
+                ) { if (page == pager.currentPage) loadedPage = page }
             }
         }
 
@@ -236,7 +242,7 @@ fun ViewerScreen(hub: Hub, feed: Feed, start: Int) {
         val p = feed.posts.getOrNull(index)
 
         // Top: back, where we are, what kind of file — as in the design.
-        AnimatedVisibility(p != null && chrome, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.TopCenter)) {
+        AnimatedVisibility(p != null && chrome && !zoomed, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.TopCenter)) {
             if (p == null) return@AnimatedVisibility
             Row(
                 Modifier
@@ -270,9 +276,9 @@ fun ViewerScreen(hub: Hub, feed: Feed, start: Int) {
 
         // Bottom: the design's info panel, in the thumb's reach.
         AnimatedVisibility(
-            p != null && chrome,
+            p != null && chrome && !zoomed,
             enter = fadeIn() + slideInVertically { it / 3 },
-            exit = fadeOut() + slideOutVertically { it / 3 },
+            exit = fadeOut() + slideOutVertically { it },
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
             if (p == null) return@AnimatedVisibility
@@ -604,9 +610,14 @@ private fun size(n: Long) = if (n > 0) bytes(n) else "—"
 private fun Still(
     url: String?, placeholder: String?, ratio: Float, panel: Int,
     notes: List<Note> = emptyList(), w: Int = 0, h: Int = 0,
+    onZoomed: (Boolean) -> Unit = {},
     onLoaded: () -> Unit = {},
 ) {
     var scale by remember { mutableFloatStateOf(1f) }
+    // Told once each way, not on every frame of a pinch.
+    val zoomedIn by remember { derivedStateOf { scale > 1.01f } }
+    val reportZoom by rememberUpdatedState(onZoomed)
+    LaunchedEffect(zoomedIn) { reportZoom(zoomedIn) }
     var offset by remember { mutableStateOf(Offset.Zero) }
     var size by remember { mutableStateOf(IntSize.Zero) }
     val zoomer = androidx.compose.runtime.rememberCoroutineScope()
